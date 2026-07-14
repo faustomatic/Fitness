@@ -164,8 +164,10 @@ textarea.input{resize:vertical; min-height:70px}
   background:var(--ink); color:var(--bg); padding:11px 16px; border-radius:12px; font-size:14px; font-weight:600;
   z-index:60; box-shadow:var(--shadow); max-width:90%; text-align:center; animation:fade .2s}
 
-.overlay{position:fixed; inset:0; z-index:50; background:var(--bg); overflow-y:auto; max-width:560px; margin:0 auto;
-  padding-bottom:calc(env(safe-area-inset-bottom) + 20px)}
+/* The overlay layer becomes a fixed full-screen sheet whenever it has content,
+   sitting above the tab bar (z 30) so nothing is hidden behind the tray. */
+#overlay:not(:empty){position:fixed; inset:0; z-index:50; background:var(--bg); overflow-y:auto;
+  max-width:560px; margin:0 auto; padding-bottom:calc(env(safe-area-inset-bottom) + 28px)}
 .thumb{width:78px; height:104px; object-fit:cover; border-radius:9px; border:1px solid var(--line)}
 canvas{display:block; width:100%}
 a{color:var(--accent)}
@@ -1086,7 +1088,7 @@ function renderImport(result){
     el("select",{class:"input",onchange:e=>{importSource=e.target.value;renderImport(result);}},
      [["myFitnessPal","MyFitnessPal"],["withings","Withings"],["ultrahuman","Ultrahuman"],["csvImport","Other CSV"]].map(([k,v])=>el("option",{value:k,selected:importSource===k?"selected":null},v))),
     el("label",{class:"btn primary",style:"margin-top:12px;cursor:pointer"},"⭳ Choose CSV / JSON file",
-     el("input",{type:"file",accept:".csv,.json,.txt,text/csv,application/json",style:"display:none",onchange:handleImport})),
+     el("input",{type:"file",accept:".csv,.json,.txt",style:"display:none",onchange:handleImport})),
     el("div",{class:"xs dim",style:"margin-top:10px"},hints[importSource])),
    result?el("div",{class:"card"},el("div",{class:"label"},"Result"),el("div",{class:"small"},result)):null])));
 }
