@@ -1,0 +1,45 @@
+name: FitCoach
+options:
+  bundleIdPrefix: com.fausto
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+targets:
+  FitCoach:
+    type: application
+    platform: iOS
+    sources:
+      - FitCoach
+    entitlements:
+      path: FitCoach/FitCoach.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
+    info:
+      path: FitCoach/Info.plist
+      properties:
+        CFBundleDisplayName: FitCoach
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSHealthShareUsageDescription: >-
+          FitCoach reads weight, body composition, sleep, HRV, steps and logged
+          nutrition (synced from MyFitnessPal, Withings and Ultrahuman via Apple
+          Health) to build and adapt your training plan and nutrition targets.
+        NSHealthUpdateUsageDescription: >-
+          FitCoach can save completed strength workouts to Apple Health.
+        NSCameraUsageDescription: >-
+          FitCoach uses the camera to take weekly check-in progress photos.
+        NSPhotoLibraryUsageDescription: >-
+          FitCoach lets you attach progress photos from your library to weekly check-ins.
+        UIBackgroundModes: []
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.9"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Automatic
