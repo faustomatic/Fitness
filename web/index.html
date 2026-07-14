@@ -1087,23 +1087,37 @@ function renderImport(result){
    el("div",{class:"card"},el("div",{class:"label"},"Source app"),
     el("select",{class:"input",onchange:e=>{importSource=e.target.value;renderImport(result);}},
      [["myFitnessPal","MyFitnessPal"],["withings","Withings"],["ultrahuman","Ultrahuman"],["csvImport","Other CSV"]].map(([k,v])=>el("option",{value:k,selected:importSource===k?"selected":null},v))),
-    el("label",{class:"btn primary",style:"margin-top:12px;cursor:pointer"},"⭳ Choose CSV / JSON file",
-     el("input",{type:"file",accept:".csv,.json,.txt",style:"display:none",onchange:handleImport})),
-    el("div",{class:"xs dim",style:"margin-top:10px"},hints[importSource])),
+    el("label",{class:"btn primary",style:"margin-top:12px;cursor:pointer"},"⭳ Choose CSV / JSON files",
+     el("input",{type:"file",accept:".csv,.json,.txt",multiple:"multiple",style:"display:none",onchange:handleImport})),
+    el("div",{class:"xs dim",style:"margin-top:8px"},"Tip: select several files at once — e.g. one export each from MyFitnessPal, Withings and Ultrahuman."),
+    el("div",{class:"xs dim",style:"margin-top:6px"},hints[importSource])),
    result?el("div",{class:"card"},el("div",{class:"label"},"Result"),el("div",{class:"small"},result)):null])));
 }
-function handleImport(e){
- const file=e.target.files[0]; if(!file)return;
- const r=new FileReader();
- r.onload=()=>{ try{
-   let rows;
-   if(file.name.toLowerCase().endsWith(".json"))rows=importJSON(r.result,importSource);
-   else rows=importCSV(r.result,importSource);
-   const {added,merged}=ingest(rows);
-   const nf=S.flags.filter(f=>rows.some(x=>startOfDay(x.date)===startOfDay(f.date)));
-   renderImport(`${added} days added, ${merged} merged from ${importSource}.`+(nf.length?` ⚠️ ${nf.length} value(s) flagged: ${nf.slice(0,2).map(f=>f.message).join(" ")}`:" Everything passed sanity checks."));
-  }catch(err){ renderImport("Import failed: "+err.message); } };
- r.readAsText(file);
+function readText(file){ return new Promise((res,rej)=>{ const r=new FileReader();
+ r.onload=()=>res(r.result); r.onerror=()=>rej(new Error("couldn't be read")); r.readAsText(file); }); }
+async function handleImport(e){
+ const files=[...e.target.files]; if(!files.length)return;
+ renderImport(`Importing ${files.length} file${files.length>1?"s":""}…`);
+ let added=0, merged=0; const okFiles=[], errs=[], touched=[];
+ for(const file of files){
+  try{
+   const text=await readText(file);
+   const rows=file.name.toLowerCase().endsWith(".json")?importJSON(text,importSource):importCSV(text,importSource);
+   const r=ingest(rows); added+=r.added; merged+=r.merged; okFiles.push(file.name);
+   for(const x of rows)touched.push(startOfDay(x.date));
+  }catch(err){ errs.push(`${file.name} (${err.message})`); }
+ }
+ const touchedSet=new Set(touched);
+ const nf=S.flags.filter(f=>touchedSet.has(startOfDay(f.date)));
+ let msg="";
+ if(okFiles.length){
+  msg=`${added} days added, ${merged} merged from ${okFiles.length} file${okFiles.length>1?"s":""} (${importSource}).`;
+  msg+= nf.length ? ` ⚠️ ${nf.length} value(s) flagged: ${nf.slice(0,2).map(f=>f.message).join(" ")}` : " Everything passed sanity checks.";
+ }
+ if(errs.length) msg=(msg?msg+" ":"")+`Skipped ${errs.length} file${errs.length>1?"s":""}: ${errs.join("; ")}.`;
+ renderImport(msg||"No data imported.");
+ // reset so re-selecting the same files fires change again
+ e.target.value="";
 }
 function importJSON(text,source){
  const obj=JSON.parse(text); let rows=Array.isArray(obj)?obj:null;
