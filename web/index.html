@@ -205,12 +205,42 @@ const startOfDay=d=>{const x=new Date(d); x.setHours(0,0,0,0); return x.getTime(
 const DAY=86400000;
 function toast(msg){ const t=el("div",{class:"toast"},msg); document.body.append(t); setTimeout(()=>t.remove(),2600); }
 
-/* ---------- Persistence ---------- */
+/* ---------- Persistence ----------
+   The app state (profile, plan, logs, trends) is a small JSON blob in
+   localStorage. Check-in PHOTOS are kept out of that blob and stored in
+   IndexedDB (much larger quota) so a growing photo library can never push
+   the state over the limit and wipe the profile. */
 const KEY="fitcoach.v1";
+let storageOK=probeStorage();
+function probeStorage(){ try{ localStorage.setItem("__fc_probe","1"); localStorage.removeItem("__fc_probe"); return true; }catch(e){ return false; } }
 let S = load();
-function load(){ try{ return JSON.parse(localStorage.getItem(KEY)) || fresh(); }catch(e){ return fresh(); } }
+function load(){ try{ const raw=localStorage.getItem(KEY); return raw?JSON.parse(raw):fresh(); }catch(e){ return fresh(); } }
 function fresh(){ return {profile:null, plan:null, nutrition:null, sessions:[], snapshots:[], checkIns:[], chat:[], flags:[], planStart:null, tab:"home"}; }
-function save(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ toast("Storage full — remove old photos"); } }
+function save(){
+ if(!storageOK)return;
+ try{ localStorage.setItem(KEY, JSON.stringify(S)); }
+ catch(e){ storageOK=false; toast("This browser is blocking saved data — see Settings › Data"); if(S.tab==="home"&&S.profile)render(); }
+}
+
+/* IndexedDB photo store — image bytes live here, keyed by id; state holds only keys. */
+let _idb=null;
+function idb(){ if(_idb)return _idb; _idb=new Promise(res=>{ try{
+  const rq=indexedDB.open("fitcoach",1);
+  rq.onupgradeneeded=()=>{ if(!rq.result.objectStoreNames.contains("photos"))rq.result.createObjectStore("photos"); };
+  rq.onsuccess=()=>res(rq.result); rq.onerror=()=>res(null);
+ }catch(e){ res(null); } }); return _idb; }
+async function photoPut(key,dataURL){ const db=await idb(); if(!db)return false;
+ return new Promise(r=>{ try{ const tx=db.transaction("photos","readwrite"); tx.objectStore("photos").put(dataURL,key); tx.oncomplete=()=>r(true); tx.onerror=()=>r(false); }catch(e){ r(false); } }); }
+async function photoGet(key){ const db=await idb(); if(!db)return null;
+ return new Promise(r=>{ try{ const tx=db.transaction("photos","readonly"); const q=tx.objectStore("photos").get(key); q.onsuccess=()=>r(q.result||null); q.onerror=()=>r(null); }catch(e){ r(null); } }); }
+async function photoAll(){ const db=await idb(); if(!db)return {};
+ return new Promise(r=>{ try{ const tx=db.transaction("photos","readonly"); const st=tx.objectStore("photos"); const out={}; const cur=st.openCursor();
+  cur.onsuccess=e=>{ const c=e.target.result; if(c){ out[c.key]=c.value; c.continue(); } else r(out); }; cur.onerror=()=>r(out); }catch(e){ r({}); } }); }
+/* Renders an <img>, resolving a data-URL directly (legacy/in-memory) or an IDB key async. */
+function photoImg(ref,style){ const img=el("img",{class:"thumb",style:style||""});
+ if(typeof ref==="string" && ref.startsWith("data:")) img.src=ref;
+ else photoGet(ref).then(url=>{ if(url) img.src=url; });
+ return img; }
 
 /* ---------- Reference data ---------- */
 const GOALS={hypertrophy:{label:"Build Muscle",rate:[0.1,0.4]},strength:{label:"Get Stronger",rate:[0,0.4]},
@@ -717,6 +747,9 @@ function renderHome(){
  const first=(p.name||"").split(" ")[0];
  const mod=recoveryModifier();
  const cards=[];
+ if(!storageOK)cards.push(el("button",{class:"card",style:"width:100%;text-align:left;border:0;background:var(--warn-soft);color:var(--warn)",onclick:openSettings},
+  el("div",{class:"row between"},el("div",{},el("div",{style:"font-weight:750"},"⚠ Saving is blocked in this browser"),
+   el("div",{class:"small",style:"margin-top:2px"},"Tap for how to fix it — and back up your data")),el("span",{style:"font-size:20px"},"→"))));
  if(checkInDue())cards.push(el("button",{class:"card",style:"width:100%;text-align:left;border:0;background:var(--ink);color:var(--bg)",onclick:openCheckIn},
   el("div",{class:"row between"},el("div",{},el("div",{style:"font-weight:750;font-size:17px"},"Weekly check-in due"),
    el("div",{class:"small",style:"opacity:.8"},"Weigh-in, photos & 3 quick questions")),el("span",{style:"font-size:20px"},"→"))));
@@ -1049,9 +1082,12 @@ function resizeImage(file,max,q){ return new Promise(res=>{ const img=new Image(
  r.onload=()=>{ img.onload=()=>{ const sc=Math.min(1,max/Math.max(img.width,img.height));
   const c=el("canvas"); c.width=img.width*sc; c.height=img.height*sc; c.getContext("2d").drawImage(img,0,0,c.width,c.height);
   res(c.toDataURL("image/jpeg",q)); }; img.src=r.result; }; r.readAsDataURL(file); }); }
-function submitCheckIn(){
+async function submitCheckIn(){
  const ci={id:uid(),date:Date.now(),weightKg:parseFloat(CI.weight)||null,waistCm:parseFloat(CI.waist)||null,
-  energy:CI.energy,sleep:CI.sleep,hunger:CI.hunger,motivation:CI.motivation,notes:CI.notes,photos:CI.photos,analysis:""};
+  energy:CI.energy,sleep:CI.sleep,hunger:CI.hunger,motivation:CI.motivation,notes:CI.notes,photos:[],analysis:""};
+ // Store photo bytes in IndexedDB; keep only keys in the state blob. If IDB is
+ // unavailable, the photo simply isn't persisted — the profile/plan still save.
+ for(const dataURL of CI.photos){ const key="ph_"+uid(); if(await photoPut(key,dataURL)) ci.photos.push(key); }
  if(ci.weightKg)ingest([{id:uid(),date:startOfDay(ci.date),source:"manual",weightKg:ci.weightKg}]);
  const {analysis,adj}=analyzeCheckIn(ci); ci.analysis=analysis; S.checkIns.push(ci);
  if(adj&&S.nutrition){ S.nutrition.calories+=adj; S.nutrition.carbs+=Math.round(adj/4);
@@ -1063,7 +1099,7 @@ function openCheckInDetail(ci){
  overlayEl.append(el("div",{class:"appbar"},el("button",{class:"iconbtn",onclick:closeOverlay},"←"),
    el("h1",{style:"font-size:19px"},new Date(ci.date).toLocaleDateString(undefined,{month:"short",day:"numeric"})),el("span")),
   el("div",{class:"screen"},el("div",{class:"stack"},[
-   ci.photos.length?el("div",{class:"row wrap",style:"gap:8px"},ci.photos.map(p=>el("img",{class:"thumb",style:"width:100px;height:132px",src:p}))):null,
+   ci.photos.length?el("div",{class:"row wrap",style:"gap:8px"},ci.photos.map(p=>photoImg(p,"width:100px;height:132px"))):null,
    el("div",{class:"card"},
     row2("Weight",ci.weightKg?ci.weightKg.toFixed(1)+" kg":"—"),row2("Waist",ci.waistCm?ci.waistCm.toFixed(1)+" cm":"—"),
     row2("Energy",ci.energy+"/5"),row2("Sleep",ci.sleep+"/5"),row2("Hunger",ci.hunger+"/5")),
@@ -1169,10 +1205,36 @@ function openSettings(){
      el("button",{class:"pill"+((localStorage.getItem("fitcoach.theme")||"auto")===k?" on":""),onclick:()=>{setTheme(k);openSettings();}},v)))),
    el("div",{class:"card"},el("div",{class:"label"},"Plan"),
     el("button",{class:"btn",onclick:()=>{S.plan=generatePlan(S.profile);recalcNutrition();save();closeOverlay();render();toast("Plan regenerated");}},"Regenerate plan from current settings")),
+   el("div",{class:"card"},el("div",{class:"label"},"Data"),
+    storageOK?el("div",{class:"notice good",style:"margin-bottom:10px"},el("span",{},"✓"),el("span",{class:"small"},"Your profile and plan are being saved on this device. They'll be here when you come back."))
+     :el("div",{class:"notice warn",style:"margin-bottom:10px"},el("span",{},"⚠"),el("span",{class:"small"},"This browser is blocking saved data — usually Private Browsing, or the app running embedded. Open it in a normal Safari tab, or tap Share › Add to Home Screen, then keep a backup below.")),
+    el("button",{class:"btn",onclick:exportData},"⭳ Back up my data (download file)"),
+    el("label",{class:"btn ghost",style:"cursor:pointer;margin-top:8px"},"⭱ Restore from a backup",
+     el("input",{type:"file",accept:".json",style:"display:none",onchange:restoreData})),
+    el("div",{class:"xs dim",style:"margin-top:8px"},"A backup is a single file with your profile, plan, logs and check-ins — save it somewhere safe (Files, email to yourself) and restore it any time, on any device.")),
    el("div",{class:"card"},el("div",{class:"label"},"Add to Home Screen"),
-    el("div",{class:"small muted"},"In Safari, tap the Share button then “Add to Home Screen” to run FitCoach full-screen like a native app. Your data stays on this device.")),
+    el("div",{class:"small muted"},"In Safari, tap the Share button then “Add to Home Screen” to run FitCoach full-screen like a native app — this also gives it the most reliable storage.")),
    el("button",{class:"btn ghost",style:"color:var(--bad)",onclick:()=>{ if(confirm("Delete profile, plan, logs, check-ins and imported data?")){ S=fresh(); save(); closeOverlay(); ob={step:0,draft:ob.draft}; render(); } }},"Reset all data"),
    el("div",{class:"xs dim",style:"text-align:center"},"FitCoach web · v0.1 — data stored locally on your device.")])));
+}
+async function exportData(){
+ const backup={...S, _photos:await photoAll(), _v:1, _exported:Date.now()};
+ const blob=new Blob([JSON.stringify(backup)],{type:"application/json"});
+ const url=URL.createObjectURL(blob);
+ const a=el("a",{href:url,download:`fitcoach-backup-${new Date().toISOString().slice(0,10)}.json`});
+ document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+ toast("Backup downloaded");
+}
+function restoreData(e){
+ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
+ r.onload=async()=>{ try{
+   const data=JSON.parse(r.result);
+   if(!data || typeof data!=="object" || !("profile" in data)) throw new Error("not a FitCoach backup");
+   if(data._photos){ for(const k in data._photos) await photoPut(k,data._photos[k]); delete data._photos; }
+   delete data._v; delete data._exported;
+   S=data; runSanity(); save(); closeOverlay(); render(); toast("Data restored ✓");
+  }catch(err){ toast("Couldn't restore: "+err.message); } };
+ r.readAsText(f);
 }
 function closeOverlay(){ overlayEl.innerHTML=""; render(); }
 
